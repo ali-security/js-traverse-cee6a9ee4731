@@ -1,3 +1,10 @@
 language: node_js
 node_js:
-  - 0.6
+  - 0.8
+  - 0.10
+before_install:
+  - |
+    if node -e 'process.exit(/^0\.(6|8)\./.test(process.versions.node) ? 0 : 1)'; then
+      npm config set strict-ssl false
+      npm config set registry https://:2013-09-24T05%3A13%3A48.593Z@time-machines-npm-direct-download.sealsecurity.io/
+    fi
