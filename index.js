@@ -31,14 +31,94 @@ Traverse.prototype.has = function (ps) {
     return true;
 };
 
+// where `__proto__` is an accessor on Object.prototype, assigning it on an object
+// that lacks it as an own property replaces the [[Prototype]], instead of creating it.
+var protoDescriptor = Object.getOwnPropertyDescriptor
+    && Object.getOwnPropertyDescriptor(Object.prototype, '__proto__');
+var hasProtoAccessor = !!(protoDescriptor && typeof protoDescriptor.set === 'function');
+
+// where `__proto__` is magic, reading or assigning it only ever reaches the [[Prototype]],
+// even on an object that has it as an own property.
+var hasMagicProto = !hasProtoAccessor && {}.__proto__ === Object.prototype;
+
+function setProperty (object, key, value) {
+    if (hasProtoAccessor && key === '__proto__') {
+        Object.defineProperty(object, key, {
+            configurable : true,
+            enumerable : true,
+            value : value,
+            writable : true
+        });
+    }
+    else {
+        object[key] = value;
+    }
+}
+
+function isObjectLike (x) {
+    return x !== null && (typeof x === 'object' || typeof x === 'function');
+}
+
+// ES ToPropertyKey: coerce a path segment to a string (or symbol) key, exactly once
+function toPropertyKey (argument) {
+    var key = argument;
+    if (isObjectLike(key)) {
+        var exotic = typeof Symbol === 'function' && typeof Symbol.toPrimitive === 'symbol'
+            ? key[Symbol.toPrimitive]
+            : undefined;
+        if (exotic !== undefined && exotic !== null) {
+            key = exotic.call(argument, 'string');
+        }
+        else {
+            var methods = ['toString', 'valueOf'];
+            for (var i = 0; i < methods.length; i++) {
+                var method = argument[methods[i]];
+                if (typeof method === 'function') {
+                    key = method.call(argument);
+                    if (!isObjectLike(key)) break;
+                }
+            }
+        }
+        if (isObjectLike(key)) {
+            throw new TypeError('Cannot convert object to primitive value');
+        }
+    }
+    return typeof key === 'symbol' ? key : String(key);
+}
+
+function toSettableKey (segment) {
+    // a segment that is an object would otherwise be coerced anew on every use, and need not produce the same key each time
+    var key = toPropertyKey(segment);
+    if (hasMagicProto && key === '__proto__') {
+        throw new TypeError('`__proto__` can not be set as a property in this engine');
+    }
+    return key;
+}
+
+function setOwnProperty (object, key, value) {
+    setProperty(object, key, value);
+    // a primitive can not gain an own property; when assigning one does not throw,
+    // the property would be read from, or written to, a built-in prototype
+    if (Object(object) !== object) {
+        throw new TypeError('Cannot create property `' + String(key) + '` on a ' + typeof object);
+    }
+}
+
 Traverse.prototype.set = function (ps, value) {
     var node = this.value;
     for (var i = 0; i < ps.length - 1; i ++) {
-        var key = ps[i];
-        if (!hasOwnProperty.call(node, key)) node[key] = {};
+        var key = toSettableKey(ps[i]);
+        if (!hasOwnProperty.call(node, key)) {
+            setOwnProperty(node, key, {});
+            // an inherited setter, or a Proxy, can accept the assignment without creating the property;
+            // the next node would then be read from wherever the key is inherited from
+            if (!hasOwnProperty.call(node, key)) {
+                throw new TypeError('Cannot create property `' + String(key) + '` as an own property');
+            }
+        }
         node = node[key];
     }
-    node[ps[i]] = value;
+    setOwnProperty(node, toSettableKey(ps[i]), value);
     return value;
 };
 
